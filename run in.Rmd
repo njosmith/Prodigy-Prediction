@@ -1,0 +1,132 @@
+---
+title: "Prodigy Prediction"
+output: html_document
+date: "2025-03-26"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(worldfootballR)
+library(tidyverse)
+library(janitor)
+library(skimr)
+library(rvest)
+library(flextable)
+
+## load match results
+
+league1_25 <- fb_match_results(country = "ENG", gender = "M", season_end_year = 2025, tier = '3rd') %>% 
+  clean_names() %>% filter(as.numeric(wk) <= 46) %>% mutate(wk = as.numeric(wk))  %>% select(-c(gender,country,competition_name,round))
+
+## load table
+tab <- fb_season_team_stats(country = "ENG", gender = "M", season_end_year = 2025, tier = "3rd", stat_type = "league_table") %>% arrange(Rk) %>% select(c(Rk,Squad,MP,W,D,L,GD,Pts,Pts.MP,Last.5)) %>% clean_names()
+team_names = tab$squad
+
+
+```
+
+
+## Fixtures
+
+Predictions for the upcoming fixtures are
+```{r fixtures, echo=FALSE}
+
+#########################################################################################################
+################ Prodigy Prediction ####################################################################
+#########################################################################################################
+
+## create category
+tab <- tab %>% mutate(cat = ifelse(rk == 1,'A',ifelse(rk %in% (2:9),'A',ifelse(rk %in% (21:24),'C','B') ) ))
+
+team_names = tab$squad
+
+future_games <- league1_25 %>% filter(date >= Sys.Date()) %>% clean_names()
+
+future_games <- future_games %>% left_join(.,tab %>% mutate(hmrk = rk,hmpts = pts,hm_cat = cat) %>% select(squad,hmrk,hmpts,hm_cat),by=join_by(home==squad))
+future_games <- future_games %>% left_join(.,tab %>% mutate(awrk = rk,awpts = pts,aw_cat = cat) %>% select(squad,awrk,awpts,aw_cat),by=join_by(away==squad))
+
+future_games$hm_estpts <-0
+future_games$aw_estpts <-0
+
+## create points based on categories
+future_games <- future_games %>% mutate(hm_estpts = if_else(hm_cat == 'A' & aw_cat == 'A',1,
+                                                    if_else(hm_cat == 'A' & aw_cat == 'B',3,
+                                                    if_else(hm_cat == 'A' & aw_cat == 'C',3,
+                                                            if_else(hm_cat == 'B' & aw_cat == 'A',1,
+                                                            if_else(hm_cat == 'B' & aw_cat == 'B',1,
+                                                            if_else(hm_cat == 'B' & aw_cat == 'C',3,
+                                                              if_else(hm_cat == 'C' & aw_cat == 'A',0,
+                                                              if_else(hm_cat == 'C' & aw_cat == 'B',1,
+                                                              if_else(hm_cat == 'C' & aw_cat == 'C',1,hm_estpts
+                                                            ))))))))),
+                                          aw_estpts = if_else(hm_cat == 'A' & aw_cat == 'A',1,                  
+                                                    if_else(hm_cat == 'A' & aw_cat == 'B',0,
+                                                    if_else(hm_cat == 'A' & aw_cat == 'C',0,
+                                                    if_else(hm_cat == 'B' & aw_cat == 'A',1,
+                                                    if_else(hm_cat == 'B' & aw_cat == 'B',1,
+                                                    if_else(hm_cat == 'B' & aw_cat == 'C',0,
+                                                    if_else(hm_cat == 'C' & aw_cat == 'A',3,
+                                                    if_else(hm_cat == 'C' & aw_cat == 'B',1,
+                                                    if_else(hm_cat == 'C' & aw_cat == 'C',1,
+                                                    aw_estpts
+                                                                            )))))))))
+                                                    )
+
+future_games <- future_games %>% mutate(result = if_else(hm_cat == 'A' & aw_cat == 'A','Draw',
+                                                    if_else(hm_cat == 'A' & aw_cat == 'B','Home win',
+                                                    if_else(hm_cat == 'A' & aw_cat == 'C','Home win',
+                                                            if_else(hm_cat == 'B' & aw_cat == 'A','Draw',
+                                                            if_else(hm_cat == 'B' & aw_cat == 'B','Draw',
+                                                            if_else(hm_cat == 'B' & aw_cat == 'C','Home win',
+                                                              if_else(hm_cat == 'C' & aw_cat == 'A','Away win',
+                                                              if_else(hm_cat == 'C' & aw_cat == 'B','Draw',
+                                                              if_else(hm_cat == 'C' & aw_cat == 'C','Draw',''
+                                                            ))))))))))
+
+##future_games %>% select(home,hm_cat,hm_estpts,away,aw_cat,aw_estpts) %>% flextable()
+
+future_games_home <- future_games %>% mutate(pts= hm_estpts,squad = home) %>% select(squad,pts) 
+future_games_away <- future_games %>% mutate(pts= aw_estpts,squad = away) %>% select(squad,pts)
+
+future_games_both <- rbind(future_games_home,future_games_away) %>% group_by(squad) %>% summarise(mp = n(),pts = sum(pts))
+
+##future_games_both
+
+fixtures <- as.Date("2025-03-29")
+
+future_games %>% filter(date == fixtures) %>% select(home,hm_cat,away,aw_cat,result) %>% flextable() %>% set_header_labels(home = 'Home',hm_cat = 'Home prediction category',aw_cat = 'Away prediction category',away = 'Away',result='Result')
+
+
+
+
+```
+
+The predicted end of season top ten is:
+
+```{r pred,echo=FALSE}
+
+prodigy_pred <- rbind(tab %>% select(c(squad,mp,pts)),future_games_both) %>% group_by(squad) %>% summarise(mp = sum(mp),pts = sum(pts)) %>% ungroup() %>% arrange(desc(pts)) ##%>% mutate(rk = row_number())
+
+prodigy_pred %>% head(10) %>% flextable() %>% hline(i = c(2,6),part = "body") %>% set_header_labels(squad='Team',mp='Played',pts='Predicted Points')
+
+```
+
+## Current Table
+
+The league one table as of `r as.Date(Sys.Date()) %>% format("%d-%b-%Y")`
+
+```{r table, echo=FALSE}
+
+##plot Tab
+ggplot(data = tab)+
+  geom_bar(aes(x=-rk,y=pts),stat='identity',fill='royalblue')+
+  scale_x_continuous(labels = c(team_names),breaks = -1:-24)+
+  xlab("team name")+
+  geom_vline(xintercept = c(-2.5,-6.5,-21.5)) +
+  theme_classic()+
+  coord_flip()
+
+tab %>% head(10) %>% flextable() %>% hline(i = c(2,6),part = "body")
+
+```
